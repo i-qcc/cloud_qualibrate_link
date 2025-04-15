@@ -131,36 +131,74 @@ class QualibrateCloudHandler:
         for calibration_data in data_list:
             # Create experiment directory
             exp_name = calibration_data.data['name']
+            print(f"\nProcessing experiment: {exp_name}")
             experiment_folder_name = f"{exp_name}_{calibration_data.id}"
             experiment_dir = cloud_storage_dir / experiment_folder_name
             experiment_dir.mkdir(exist_ok=True)
+            print(f"Created directory: {experiment_dir}")
             
             # Create quam_state directory
             quam_state_dir = experiment_dir / "quam_state"
             quam_state_dir.mkdir(exist_ok=True)
             
             # Get all related data
-            node_info = qc.data.get(qc.data.list_children(datatype=f"node_info", parent_dataset_id=calibration_data.id)[0].id)
-            state_info = qc.data.get(qc.data.list_children(datatype=f"state", parent_dataset_id=calibration_data.id)[0].id)
-            wiring_info = qc.data.get(qc.data.list_children(datatype=f"wiring", parent_dataset_id=calibration_data.id)[0].id)
+            try:
+                node_info = None
+                node_children = qc.data.list_children(datatype=f"node_info", parent_dataset_id=calibration_data.id)
+                if node_children:
+                    node_info = qc.data.get(node_children[0].id)
+                    print("✓ Retrieved node_info")
+                else:
+                    print("✗ No node_info found")
+            except Exception as e:
+                print(f"✗ Could not retrieve node_info: {str(e)}")
+                node_info = None
+
+            try:
+                state_info = None
+                state_children = qc.data.list_children(datatype=f"state", parent_dataset_id=calibration_data.id)
+                if state_children:
+                    state_info = qc.data.get(state_children[0].id)
+                    print("✓ Retrieved state")
+                else:
+                    print("✗ No state found")
+            except Exception as e:
+                print(f"✗ Could not retrieve state: {str(e)}")
+                state_info = None
+
+            try:
+                wiring_info = None
+                wiring_children = qc.data.list_children(datatype=f"wiring", parent_dataset_id=calibration_data.id)
+                if wiring_children:
+                    wiring_info = qc.data.get(wiring_children[0].id)
+                    print("✓ Retrieved wiring")
+                else:
+                    print("✗ No wiring found")
+            except Exception as e:
+                print(f"✗ Could not retrieve wiring: {str(e)}")
+                wiring_info = None
             
             # Save node.json
             if node_info:
                 with open(experiment_dir / "node.json", 'w') as f:
                     json.dump(node_info.data, f, indent=4)
+                print("✓ Saved node.json")
             
             # Save state.json
             if state_info:
                 with open(quam_state_dir / "state.json", 'w') as f:
                     json.dump(state_info.data, f, indent=4)
+                print("✓ Saved state.json")
             
             # Save wiring.json
             if wiring_info:
                 with open(quam_state_dir / "wiring.json", 'w') as f:
                     json.dump(wiring_info.data, f, indent=4)
+                print("✓ Saved wiring.json")
             
             # Save PNG files
             png_files = [qc.data.get(metadata.id) for metadata in qc.data.list_children(datatype="figure", parent_dataset_id=calibration_data.id)]
+            png_count = 0
             for png_data in png_files:
                 if png_data.data.get("__type__") == "png/base64":
                     file_name = png_data.data.get("file_name")
@@ -168,8 +206,15 @@ class QualibrateCloudHandler:
                         png_bytes = base64.b64decode(png_data.data["data"])
                         with open(experiment_dir / file_name, 'wb') as f:
                             f.write(png_bytes)
+                        png_count += 1
                 else:
-                    raise ValueError(f"Unexpected data type: {png_data.data.get('__type__')}")
+                    print(f"✗ Unexpected data type in PNG file: {png_data.data.get('__type__')}")
+            if png_count > 0:
+                print(f"✓ Saved {png_count} PNG file(s)")
+            else:
+                print("✗ No PNG files found")
+            
+            print(f"Completed processing experiment: {exp_name}\n")
         
         
             
