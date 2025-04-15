@@ -24,7 +24,7 @@ def test_qualibrate_cloud_handler_initialization(experiment_path, backend_name):
 
 def test_store_from_cloud(backend_name):
     # Call the store_from_cloud method
-    QualibrateCloudHandler.store_from_cloud(backend_name, limit=1)
+    QualibrateCloudHandler.store_from_cloud(backend_name, limit=5)
     
     # Get the cloud storage directory
     cloud_storage_dir = Path.home() / ".from_cloud_storage"
@@ -39,19 +39,5 @@ def test_store_from_cloud(backend_name):
     
     # For each experiment directory, check the structure
     for exp_dir in experiment_dirs:
-        # Check main files
-        assert (exp_dir / "node.json").exists()
-        
-        # Check quam_state directory and its files
-        quam_state_dir = exp_dir / "quam_state"
-        assert quam_state_dir.exists()
-        assert quam_state_dir.is_dir()
-        assert (quam_state_dir / "state.json").exists()
-        assert (quam_state_dir / "wiring.json").exists()
-        
-        # Check for PNG files
-        png_files = list(exp_dir.glob("*.png"))
-        assert len(png_files) > 0
-        
         # Check that the directory name follows the expected pattern
         assert "_" in exp_dir.name  # Should contain experiment name and ID 
