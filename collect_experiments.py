@@ -4,15 +4,17 @@ from cloud_qualibrate_link.qualibrate_cloud_handler import QualibrateCloudHandle
 from iqcc_cloud_client import IQCC_Cloud
 import json
 import base64
+from datetime import datetime, timedelta
 
 def get_largest_existing_id(cloud_storage_dir: Path) -> int:
     """Get the largest experiment ID that is already downloaded."""
     largest_id = None
-    for exp_dir in cloud_storage_dir.glob("*"):
-        if "_" in exp_dir.name:  # Check if it follows the expected pattern
-            exp_id = int(exp_dir.name.split("_")[-1])
-            if largest_id is None or exp_id > largest_id:
-                largest_id = exp_id
+    for date_dir in cloud_storage_dir.iterdir():
+        for exp_dir in date_dir.iterdir():   
+            if exp_dir.is_dir() and "_" in exp_dir.name:  # Check if it follows the expected pattern
+                exp_id = int(exp_dir.name.split("_")[0])  # ID is now at the start
+                if largest_id is None or exp_id > largest_id:
+                  largest_id = exp_id
     return largest_id
 
 def collect_experiments(backend_name: str, max_experiments: int = 10000) -> None:
@@ -27,7 +29,7 @@ def collect_experiments(backend_name: str, max_experiments: int = 10000) -> None
     qc = IQCC_Cloud(quantum_computer_backend=backend_name, datastore="iqcc")
     
     # Get cloud storage directory
-    cloud_storage_dir = Path.home() / ".from_cloud_storage"
+    cloud_storage_dir = Path.home() / ".from_cloud_storage" / "user_storage" / "QC1"
     cloud_storage_dir.mkdir(exist_ok=True)
     
     # Get largest existing ID
@@ -64,8 +66,19 @@ def collect_experiments(backend_name: str, max_experiments: int = 10000) -> None
             # Create experiment directory
             exp_name = qc.data.get(metadata.id).data['name']
             print(f"\nProcessing experiment: {exp_name}")
-            experiment_folder_name = f"{exp_name}_{metadata.id}"
-            experiment_dir = cloud_storage_dir / experiment_folder_name
+            
+            # Extract timestamp and create date folder
+            timestamp = metadata.timestamp
+            # Convert to GMT+3 (add 3 hours)
+            timestamp_gmt3 = timestamp + timedelta(hours=3)
+            date_folder = timestamp_gmt3.strftime("%Y-%m-%d")
+            
+            # Create date-based directory structure
+            date_dir = cloud_storage_dir / date_folder
+            date_dir.mkdir(exist_ok=True)
+            
+            experiment_folder_name = f"{metadata.id}_{exp_name}"
+            experiment_dir = date_dir / experiment_folder_name
             experiment_dir.mkdir(exist_ok=True)
             
             # Save experiment data using QualibrateCloudHandler
@@ -82,8 +95,8 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="Collect experiments from the cloud")
-    parser.add_argument("backend_name", help="Name of the quantum computer backend")
-    parser.add_argument("--max-experiments", type=int, default=10000, help="Maximum number of experiments to download")
+    parser.add_argument("--backend-name", default="qc_qwfix", help="Name of the quantum computer backend")
+    parser.add_argument("--max-experiments", type=int, default=1000, help="Maximum number of experiments to download")
     
     args = parser.parse_args()
     

@@ -221,7 +221,7 @@ class QualibrateCloudHandler:
             # Create experiment directory
             exp_name = calibration_data.data['name']
             print(f"\nProcessing experiment: {exp_name}")
-            experiment_folder_name = f"{exp_name}_{calibration_data.id}"
+            experiment_folder_name = f"{calibration_data.id}_{exp_name}"
             experiment_dir = cloud_storage_dir / experiment_folder_name
             experiment_dir.mkdir(exist_ok=True)
             
