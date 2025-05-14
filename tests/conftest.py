@@ -8,4 +8,4 @@ def experiment_path():
 
 @pytest.fixture
 def backend_name():
-    return "qc_qwfix" 
+    return "arbel" 

@@ -14,6 +14,8 @@ class QualibrateCloudHandler:
             experiment_path (str): Path to the experiment folder
         """
         self.experiment_path = Path(experiment_path)
+        self.experiment_file_name = self.experiment_path.stem
+        
         self.node_data = None
         self.state_data = None
         self.wiring_data = None
@@ -76,7 +78,7 @@ class QualibrateCloudHandler:
         
         # Push parent data
         parent = qc.data.push(
-            datatype="node",
+            datatype=self.experiment_file_name,
             data={
                 "local_dir": str(self.experiment_path),
                 "name": self.experiment_name
@@ -87,21 +89,24 @@ class QualibrateCloudHandler:
         qc.data.push(
             datatype=f"node_info",
             data=self.node_data,
-            parent_id=parent.id
+            parent_id=parent.id,
+            comment=self.experiment_name
         )
         
         # Push state.json data
         qc.data.push(
             datatype=f"state",
             data=self.state_data,
-            parent_id=parent.id
+            parent_id=parent.id,
+            comment=self.experiment_name
         )
         
         # Push wiring.json data
         qc.data.push(
             datatype=f"wiring",
             data=self.wiring_data,
-            parent_id=parent.id
+            parent_id=parent.id,
+            comment=self.experiment_name
         )
         
         # Push PNG files
@@ -109,7 +114,8 @@ class QualibrateCloudHandler:
             qc.data.push(
                 datatype=f"figure",
                 data=png_data,
-                parent_id=parent.id
+                parent_id=parent.id,
+                comment=self.experiment_name
             )
     
     @classmethod
