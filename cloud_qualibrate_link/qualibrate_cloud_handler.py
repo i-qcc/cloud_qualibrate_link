@@ -78,7 +78,7 @@ class QualibrateCloudHandler:
         
         # Push parent data
         parent = qc.data.push(
-            datatype=self.experiment_file_name,
+            datatype=self.experiment_name,
             data={
                 "local_dir": str(self.experiment_path),
                 "name": self.experiment_name
