@@ -11,7 +11,7 @@ repository = "https://github.com/i-qcc/cloud_qualibrate_link"
 keywords = ["quantum", "calibration", "cloud", "qualibrate"]
 
 [tool.poetry.dependencies]
-python = ">=3.12"
+python = ">=3.9,<3.13"
 pathlib = "*"
 
 [tool.poetry.group.dev.dependencies]
