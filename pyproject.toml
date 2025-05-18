@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cloud-qualibrate-link"
-version = "0.1.0"
+version = "0.1.1"
 description = "A tool to link Qualibrate experiment data to cloud storage"
 readme = "README.md"
 authors = ["Omrie Ovdat <omrie.ovdat@quantum-machines.co>"]
