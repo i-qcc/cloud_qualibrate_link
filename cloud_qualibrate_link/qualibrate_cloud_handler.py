@@ -18,7 +18,7 @@ class QualibrateCloudHandler:
         
         self.node_data = None
         self.state_data = None
-        self.wiring_data = None
+        # self.wiring_data = None
         self.png_data = {}
         self.experiment_name = None
         
@@ -47,13 +47,13 @@ class QualibrateCloudHandler:
         with open(state_path, 'r') as f:
             self.state_data = json.load(f)
         
-        # Load wiring.json
-        wiring_path = self.experiment_path / "quam_state" / "wiring.json"
-        if not wiring_path.exists():
-            raise FileNotFoundError(f"wiring.json not found in {wiring_path}")
+        # # Load wiring.json
+        # wiring_path = self.experiment_path / "quam_state" / "wiring.json"
+        # if not wiring_path.exists():
+        #     raise FileNotFoundError(f"wiring.json not found in {wiring_path}")
         
-        with open(wiring_path, 'r') as f:
-            self.wiring_data = json.load(f)
+        # with open(wiring_path, 'r') as f:
+        #     self.wiring_data = json.load(f)
         
         # Process PNG files
         for png_file in self.experiment_path.glob("*.png"):
@@ -101,13 +101,14 @@ class QualibrateCloudHandler:
             comment=self.experiment_name
         )
         
-        # Push wiring.json data
-        qc.data.push(
-            datatype=f"wiring",
-            data=self.wiring_data,
-            parent_id=parent.id,
-            comment=self.experiment_name
-        )
+        # not pushing wiring.json data anymore
+        # # Push wiring.json data
+        # qc.data.push(
+        #     datatype=f"wiring",
+        #     data=self.wiring_data,
+        #     parent_id=parent.id,
+        #     comment=self.experiment_name
+        # )
         
         # Push PNG files
         for png_data in self.png_data.values():
