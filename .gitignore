@@ -49,3 +49,6 @@ htmlcov/
 # Local development
 .DS_Store
 Thumbs.db 
+
+.ruff_cache
+/tests
