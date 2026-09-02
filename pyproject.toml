@@ -1,6 +1,6 @@
 [project]
 name = "iqcc-qualibrate2cloud"
-version = "0.1.2"
+version = "0.2.0"
 description = "A tool to upload Qualibrate experiment data to IQCC cloud storage"
 authors = [
     {name = "Omrie Ovdat", email = "omrie.ovdat@quantum-machines.co"}
