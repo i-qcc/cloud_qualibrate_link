@@ -3,6 +3,15 @@ import base64
 from pathlib import Path
 from iqcc_cloud_client import IQCC_Cloud
 
+# Matplotlib figures are stored by QUAlibrate as PNG, Plotly figures as a JSON
+# figure spec. Both are pushed under the "figure" datatype and told apart by
+# the "__type__" field of the payload.
+PNG_TYPE = "png/base64"
+PLOTLY_TYPE = "plotly/json"
+
+# Suffix of the Plotly figure specs written next to a node's results.
+PLOTLY_SUFFIX = ".plotly.json"
+
 
 class QualibrateCloudHandler:
     def __init__(self, experiment_path: str):
@@ -17,14 +26,22 @@ class QualibrateCloudHandler:
 
         self.node_data = None
         self.state_data = None
-        # self.wiring_data = None
-        self.png_data = {}
+        self.figure_data = {}
         self.experiment_name = None
 
         self._load_experiment_data()
 
+    @property
+    def png_data(self) -> dict:
+        """PNG figures only, kept for backwards compatibility."""
+        return {
+            name: figure
+            for name, figure in self.figure_data.items()
+            if figure.get("__type__") == PNG_TYPE
+        }
+
     def _load_experiment_data(self) -> None:
-        """Load all required experiment data and process PNG files."""
+        """Load all required experiment data and process figure files."""
         # Load node.json
         node_path = self.experiment_path / "node.json"
         if not node_path.exists():
@@ -48,25 +65,32 @@ class QualibrateCloudHandler:
         with open(state_path, "r") as f:
             self.state_data = json.load(f)
 
-        # # Load wiring.json
-        # wiring_path = self.experiment_path / "quam_state" / "wiring.json"
-        # if not wiring_path.exists():
-        #     raise FileNotFoundError(f"wiring.json not found in {wiring_path}")
+        self._load_figures()
 
-        # with open(wiring_path, 'r') as f:
-        #     self.wiring_data = json.load(f)
-
-        # Process PNG files
+    def _load_figures(self) -> None:
+        """Collect matplotlib PNG figures and Plotly figure specs."""
+        # Matplotlib figures, saved as PNG.
         for png_file in self.experiment_path.glob("*.png"):
             with open(png_file, "rb") as f:
                 png_bytes = f.read()
-                base64_str = base64.b64encode(png_bytes).decode("utf-8")
 
-                self.png_data[png_file.name] = {
-                    "data": base64_str,
-                    "__type__": "png/base64",
-                    "file_name": png_file.name,
-                }
+            self.figure_data[png_file.name] = {
+                "data": base64.b64encode(png_bytes).decode("utf-8"),
+                "__type__": PNG_TYPE,
+                "file_name": png_file.name,
+            }
+
+        # Plotly figures, uploaded as the figure spec itself so the cloud can
+        # re-render them interactively rather than storing a flat image.
+        for plotly_file in self.experiment_path.glob(f"*{PLOTLY_SUFFIX}"):
+            with open(plotly_file, "r") as f:
+                figure_spec = json.load(f)
+
+            self.figure_data[plotly_file.name] = {
+                "data": figure_spec,
+                "__type__": PLOTLY_TYPE,
+                "file_name": plotly_file.name,
+            }
 
     def upload_to_cloud(self, quantum_computer_backend: str) -> None:
         """
@@ -104,20 +128,11 @@ class QualibrateCloudHandler:
             comment=self.experiment_name,
         )
 
-        # not pushing wiring.json data anymore
-        # # Push wiring.json data
-        # qc.data.push(
-        #     datatype=f"wiring",
-        #     data=self.wiring_data,
-        #     parent_id=parent.id,
-        #     comment=self.experiment_name
-        # )
-
-        # Push PNG files
-        for png_data in self.png_data.values():
+        # Push figures (matplotlib PNGs and Plotly figure specs)
+        for figure in self.figure_data.values():
             qc.data.push(
                 datatype="figure",
-                data=png_data,
+                data=figure,
                 parent_id=parent.id,
                 comment=self.experiment_name,
             )
@@ -199,30 +214,40 @@ class QualibrateCloudHandler:
                 json.dump(wiring_info.data, f, indent=4)
             print("✓ Saved wiring.json")
 
-        # Save PNG files
-        png_files = [
+        # Save figures (matplotlib PNGs and Plotly figure specs)
+        figures = [
             qc.data.get(metadata.id)
             for metadata in qc.data.list_children(
                 datatype="figure", parent_dataset_id=dataset_id
             )
         ]
         png_count = 0
-        for png_data in png_files:
-            if png_data.data.get("__type__") == "png/base64":
-                file_name = png_data.data.get("file_name")
-                if file_name:
-                    png_bytes = base64.b64decode(png_data.data["data"])
-                    with open(experiment_dir / file_name, "wb") as f:
-                        f.write(png_bytes)
-                    png_count += 1
+        plotly_count = 0
+        for figure in figures:
+            figure_type = figure.data.get("__type__")
+            file_name = figure.data.get("file_name")
+            if not file_name:
+                print(f"✗ Figure without a file name: {figure_type}")
+                continue
+
+            if figure_type == PNG_TYPE:
+                png_bytes = base64.b64decode(figure.data["data"])
+                with open(experiment_dir / file_name, "wb") as f:
+                    f.write(png_bytes)
+                png_count += 1
+            elif figure_type == PLOTLY_TYPE:
+                with open(experiment_dir / file_name, "w") as f:
+                    json.dump(figure.data["data"], f)
+                plotly_count += 1
             else:
-                print(
-                    f"✗ Unexpected data type in PNG file: {png_data.data.get('__type__')}"
-                )
+                print(f"✗ Unexpected data type in figure file: {figure_type}")
+
         if png_count > 0:
             print(f"✓ Saved {png_count} PNG file(s)")
-        else:
-            print("✗ No PNG files found")
+        if plotly_count > 0:
+            print(f"✓ Saved {plotly_count} Plotly figure(s)")
+        if png_count == 0 and plotly_count == 0:
+            print("✗ No figure files found")
 
     @classmethod
     def store_from_cloud(
