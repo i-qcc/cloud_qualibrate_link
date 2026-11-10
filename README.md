@@ -22,15 +22,17 @@ Each node is pushed as a parent dataset (datatype = node name) with these childr
 | `wiring`    | `quam_state/wiring.json`                                      |
 | `node_data` | `data.json` (fit results and references to the dataset files) |
 | `figure`    | one per `*.png`, base64 encoded                               |
-| `raw_data`  | one per `*.h5` / `*.npz`, zlib compressed then base64 encoded |
+| `raw_data`  | a single dataset bundling all `*.h5` / `*.npz` files          |
 
-A `raw_data` payload is
-`{"__type__": "zlib/base64", "file_name", "data", "size", "sha256"}`; the
-size and sha256 of the original file are checked on download.
+The `raw_data` payload is
+`{"__type__": "raw_data/bundle", "files": [{"file_name", "size", "sha256", "data"}, ...]}`,
+where `data` is the file zlib compressed then base64 encoded. The size and
+sha256 of each original file are checked on download.
 
-Raw-data files whose encoded size exceeds `max_raw_file_bytes` (default
-15 MiB) are skipped with a warning and listed under `skipped_raw_files` in the
-parent dataset. Raw-data upload can be turned off with `upload_raw_data=False`.
+The total encoded size of the bundle is capped by `max_raw_bytes` (default
+15 MiB). If it does not fit, the largest files are skipped with a warning and
+listed under `skipped_raw_files` in the parent dataset. Raw-data upload can be
+turned off with `upload_raw_data=False`.
 
 ## Installation
 
@@ -50,7 +52,7 @@ handler.upload_to_cloud("your_quantum_computer_backend")
 # Upload without raw data, or with a different per-file size cap
 handler.upload_to_cloud("your_quantum_computer_backend", upload_raw_data=False)
 handler.upload_to_cloud(
-    "your_quantum_computer_backend", max_raw_file_bytes=5 * 1024**2
+    "your_quantum_computer_backend", max_raw_bytes=5 * 1024**2
 )
 
 # Download calibration data from the cloud

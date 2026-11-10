@@ -10,9 +10,11 @@ from iqcc_cloud_client import IQCC_Cloud
 RAW_DATA_SUFFIXES = (".h5", ".npz")
 RAW_DATA_TYPE = "zlib/base64"
 
-# Upper bound on the base64 payload of a single raw-data file. The cloud
+RAW_BUNDLE_TYPE = "raw_data/bundle"
+
+# Upper bound on the total encoded size of the raw-data dataset. The cloud
 # backend limits single messages to 20 MiB.
-DEFAULT_MAX_RAW_FILE_BYTES = 15 * 1024**2
+DEFAULT_MAX_RAW_BYTES = 15 * 1024**2
 
 # list_children returns 10 items by default; nodes saved in batches can have
 # many more raw-data files.
@@ -144,35 +146,46 @@ class QualibrateCloudHandler:
         return raw
 
     def _encode_raw_data(
-        self, max_raw_file_bytes: int
-    ) -> tuple[list[dict], list[str]]:
-        """Encode raw-data files, skipping those above the size cap.
+        self, max_raw_bytes: int
+    ) -> tuple[dict | None, list[str]]:
+        """Bundle the raw-data files into a single payload.
+
+        Files are added smallest first until the total encoded size would
+        exceed the cap; the remaining files are skipped.
 
         Args:
-            max_raw_file_bytes: Maximum size of a single encoded payload.
+            max_raw_bytes: Maximum total encoded size of the bundle.
 
         Returns:
-            tuple: Encoded payloads and names of the skipped files.
+            tuple: The bundle payload (None if there are no files) and the
+                names of the skipped files.
         """
-        payloads, skipped = [], []
-        for path in self.raw_data_files:
-            payload = self.encode_raw_file(path)
-            if len(payload["data"]) > max_raw_file_bytes:
+        encoded = sorted(
+            (self.encode_raw_file(p) for p in self.raw_data_files),
+            key=lambda payload: len(payload["data"]),
+        )
+        files, skipped, total = [], [], 0
+        for payload in encoded:
+            total += len(payload["data"])
+            if total > max_raw_bytes:
+                total -= len(payload["data"])
                 print(
-                    f"✗ Skipping raw data file {path.name}: encoded size "
-                    f"{len(payload['data']) / 1e6:.1f} MB exceeds "
-                    f"{max_raw_file_bytes / 1e6:.1f} MB"
+                    f"✗ Skipping raw data file {payload['file_name']}: "
+                    f"bundle would exceed {max_raw_bytes / 1e6:.1f} MB"
                 )
-                skipped.append(path.name)
+                skipped.append(payload["file_name"])
             else:
-                payloads.append(payload)
-        return payloads, skipped
+                files.append(payload)
+        if not files:
+            return None, skipped
+        files.sort(key=lambda payload: payload["file_name"])
+        return {"__type__": RAW_BUNDLE_TYPE, "files": files}, skipped
 
     def upload_to_cloud(
         self,
         quantum_computer_backend: str,
         upload_raw_data: bool = True,
-        max_raw_file_bytes: int = DEFAULT_MAX_RAW_FILE_BYTES,
+        max_raw_bytes: int = DEFAULT_MAX_RAW_BYTES,
     ) -> None:
         """
         Upload the experiment data to the cloud.
@@ -180,14 +193,14 @@ class QualibrateCloudHandler:
         Args:
             quantum_computer_backend (str): Name of the quantum computer backend
             upload_raw_data (bool): Also upload raw-data files (*.h5, *.npz)
-                (default: True)
-            max_raw_file_bytes (int): Raw-data files whose encoded size
-                exceeds this are skipped (default: 15 MiB)
+                as a single `raw_data` dataset (default: True)
+            max_raw_bytes (int): Maximum total encoded size of the raw-data
+                dataset; files that do not fit are skipped (default: 15 MiB)
         """
-        raw_payloads, skipped_raw_files = (
-            self._encode_raw_data(max_raw_file_bytes)
+        raw_bundle, skipped_raw_files = (
+            self._encode_raw_data(max_raw_bytes)
             if upload_raw_data
-            else ([], [])
+            else (None, [])
         )
 
         qc = IQCC_Cloud(
@@ -249,18 +262,18 @@ class QualibrateCloudHandler:
                 comment=self.experiment_name,
             )
 
-        # Push raw-data files
-        for payload in raw_payloads:
+        # Push all raw-data files as one dataset
+        if raw_bundle is not None:
             if (
                 qc.data.push(
                     datatype="raw_data",
-                    data=payload,
+                    data=raw_bundle,
                     parent_id=parent.id,
                     comment=self.experiment_name,
                 )
                 is None
             ):
-                print(f"✗ Failed to upload raw data {payload['file_name']}")
+                print("✗ Failed to upload raw data")
 
     @classmethod
     def _save_experiment_data(
@@ -393,19 +406,27 @@ class QualibrateCloudHandler:
             parent_dataset_id=dataset_id,
             limit=CHILDREN_LIMIT,
         ):
-            payload = qc.data.get(metadata.id).data
-            file_name = Path(payload.get("file_name", "")).name
-            if not file_name:
-                print("✗ Raw data file without a file name")
-                continue
-            try:
-                raw = cls.decode_raw_file(payload)
-            except Exception as e:
-                print(f"✗ Could not decode raw data {file_name}: {str(e)}")
-                continue
-            with open(experiment_dir / file_name, "wb") as f:
-                f.write(raw)
-            raw_count += 1
+            data = qc.data.get(metadata.id).data
+            # Single-file payloads from version 0.3.0 pre-releases are
+            # still readable.
+            payloads = (
+                data.get("files", [])
+                if data.get("__type__") == RAW_BUNDLE_TYPE
+                else [data]
+            )
+            for payload in payloads:
+                file_name = Path(payload.get("file_name", "")).name
+                if not file_name:
+                    print("✗ Raw data file without a file name")
+                    continue
+                try:
+                    raw = cls.decode_raw_file(payload)
+                except Exception as e:
+                    print(f"✗ Could not decode raw data {file_name}: {str(e)}")
+                    continue
+                with open(experiment_dir / file_name, "wb") as f:
+                    f.write(raw)
+                raw_count += 1
         if raw_count > 0:
             print(f"✓ Saved {raw_count} raw data file(s)")
         else:

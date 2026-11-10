@@ -68,7 +68,7 @@ def test_round_trip_restores_all_files(fake_cloud, node_dir, tmp_path):
     QualibrateCloudHandler(str(node_dir)).upload_to_cloud("backend")
 
     types = sorted(d.type for d in fake_cloud.datasets.values())
-    assert types.count("raw_data") == 3
+    assert types.count("raw_data") == 1
     assert {"wiring", "node_data", "figure"} <= set(types)
 
     out_dir = tmp_path / "out"
@@ -104,12 +104,13 @@ def test_raw_data_opt_out(fake_cloud, node_dir):
 
 def test_files_over_cap_are_skipped(fake_cloud, node_dir):
     QualibrateCloudHandler(str(node_dir)).upload_to_cloud(
-        "backend", max_raw_file_bytes=2000
+        "backend", max_raw_bytes=2000
     )
     uploaded = {
-        d.data["file_name"]
+        f["file_name"]
         for d in fake_cloud.datasets.values()
         if d.type == "raw_data"
+        for f in d.data["files"]
     }
     assert uploaded == {"ds_raw.h5", "arrays.npz"}
     assert fake_cloud.datasets[1].data["skipped_raw_files"] == ["ds_fit.h5"]
