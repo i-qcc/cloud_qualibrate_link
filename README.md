@@ -22,10 +22,10 @@ Each node is pushed as a parent dataset (datatype = node name) with these childr
 | `wiring`    | `quam_state/wiring.json`                                      |
 | `node_data` | `data.json` (fit results and references to the dataset files) |
 | `figure`    | one per `*.png`, base64 encoded                               |
-| `raw_data`  | a single dataset bundling all `*.h5` / `*.npz` files          |
+| `exp_data`  | a single dataset bundling all `*.h5` / `*.npz` files          |
 
-The `raw_data` payload is
-`{"__type__": "raw_data/bundle", "files": [{"file_name", "size", "sha256", "data"}, ...]}`,
+The `exp_data` payload is
+`{"__type__": "exp_data/bundle", "files": [{"file_name", "size", "sha256", "data"}, ...]}`,
 where `data` is the file zlib compressed then base64 encoded. The size and
 sha256 of each original file are checked on download.
 

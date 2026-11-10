@@ -10,7 +10,11 @@ from iqcc_cloud_client import IQCC_Cloud
 RAW_DATA_SUFFIXES = (".h5", ".npz")
 RAW_DATA_TYPE = "zlib/base64"
 
-RAW_BUNDLE_TYPE = "raw_data/bundle"
+# Cloud dataset type for experiment data files (*.h5, *.npz).
+EXP_DATA_DATATYPE = "exp_data"
+EXP_BUNDLE_TYPE = "exp_data/bundle"
+LEGACY_EXP_DATA_DATATYPE = "raw_data"
+LEGACY_EXP_BUNDLE_TYPE = "raw_data/bundle"
 
 # Upper bound on the total encoded size of the raw-data dataset. The cloud
 # backend limits single messages to 20 MiB.
@@ -179,7 +183,7 @@ class QualibrateCloudHandler:
         if not files:
             return None, skipped
         files.sort(key=lambda payload: payload["file_name"])
-        return {"__type__": RAW_BUNDLE_TYPE, "files": files}, skipped
+        return {"__type__": EXP_BUNDLE_TYPE, "files": files}, skipped
 
     def upload_to_cloud(
         self,
@@ -193,7 +197,7 @@ class QualibrateCloudHandler:
         Args:
             quantum_computer_backend (str): Name of the quantum computer backend
             upload_raw_data (bool): Also upload raw-data files (*.h5, *.npz)
-                as a single `raw_data` dataset (default: True)
+                as a single `exp_data` dataset (default: True)
             max_raw_bytes (int): Maximum total encoded size of the raw-data
                 dataset; files that do not fit are skipped (default: 15 MiB)
         """
@@ -266,7 +270,7 @@ class QualibrateCloudHandler:
         if raw_bundle is not None:
             if (
                 qc.data.push(
-                    datatype="raw_data",
+                    datatype=EXP_DATA_DATATYPE,
                     data=raw_bundle,
                     parent_id=parent.id,
                     comment=self.experiment_name,
@@ -399,21 +403,24 @@ class QualibrateCloudHandler:
         else:
             print("✗ No PNG files found")
 
-        # Save raw-data files
+        # Save experiment data files (*.h5 / *.npz)
         raw_count = 0
-        for metadata in qc.data.list_children(
-            datatype="raw_data",
-            parent_dataset_id=dataset_id,
-            limit=CHILDREN_LIMIT,
-        ):
-            data = qc.data.get(metadata.id).data
-            # Single-file payloads from version 0.3.0 pre-releases are
-            # still readable.
-            payloads = (
-                data.get("files", [])
-                if data.get("__type__") == RAW_BUNDLE_TYPE
-                else [data]
+        exp_data_children = []
+        for datatype in (EXP_DATA_DATATYPE, LEGACY_EXP_DATA_DATATYPE):
+            exp_data_children.extend(
+                qc.data.list_children(
+                    datatype=datatype,
+                    parent_dataset_id=dataset_id,
+                    limit=CHILDREN_LIMIT,
+                )
             )
+        for metadata in exp_data_children:
+            data = qc.data.get(metadata.id).data
+            # Bundled (exp_data or legacy raw_data) and single-file payloads.
+            if data.get("__type__") in (EXP_BUNDLE_TYPE, LEGACY_EXP_BUNDLE_TYPE):
+                payloads = data.get("files", [])
+            else:
+                payloads = [data]
             for payload in payloads:
                 file_name = Path(payload.get("file_name", "")).name
                 if not file_name:
