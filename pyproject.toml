@@ -44,7 +44,7 @@ include = [
 ]
 
 [tool.uv]
-prerelease = "allow"
+prerelease = "if-necessary-or-explicit"
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.

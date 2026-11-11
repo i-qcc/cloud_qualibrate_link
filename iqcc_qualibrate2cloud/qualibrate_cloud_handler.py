@@ -413,11 +413,15 @@ class QualibrateCloudHandler:
                     parent_dataset_id=dataset_id,
                     limit=CHILDREN_LIMIT,
                 )
+                or []
             )
         for metadata in exp_data_children:
             data = qc.data.get(metadata.id).data
             # Bundled (exp_data or legacy raw_data) and single-file payloads.
-            if data.get("__type__") in (EXP_BUNDLE_TYPE, LEGACY_EXP_BUNDLE_TYPE):
+            if data.get("__type__") in (
+                EXP_BUNDLE_TYPE,
+                LEGACY_EXP_BUNDLE_TYPE,
+            ):
                 payloads = data.get("files", [])
             else:
                 payloads = [data]
