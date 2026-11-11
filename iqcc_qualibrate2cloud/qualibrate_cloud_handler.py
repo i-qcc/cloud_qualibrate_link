@@ -1,7 +1,28 @@
 import json
 import base64
+import hashlib
+import zlib
 from pathlib import Path
 from iqcc_cloud_client import IQCC_Cloud
+
+# Raw and fit datasets saved by QUAlibrate next to node.json (xarray HDF5 /
+# numpy archives). Uploaded so plots can be recreated from the cloud copy.
+RAW_DATA_SUFFIXES = (".h5", ".npz")
+RAW_DATA_TYPE = "zlib/base64"
+
+# Cloud dataset type for experiment data files (*.h5, *.npz).
+EXP_DATA_DATATYPE = "exp_data"
+EXP_BUNDLE_TYPE = "exp_data/bundle"
+LEGACY_EXP_DATA_DATATYPE = "raw_data"
+LEGACY_EXP_BUNDLE_TYPE = "raw_data/bundle"
+
+# Upper bound on the total encoded size of the raw-data dataset. The cloud
+# backend limits single messages to 20 MiB.
+DEFAULT_MAX_RAW_BYTES = 15 * 1024**2
+
+# list_children returns 10 items by default; nodes saved in batches can have
+# many more raw-data files.
+CHILDREN_LIMIT = 1000
 
 
 class QualibrateCloudHandler:
@@ -17,8 +38,10 @@ class QualibrateCloudHandler:
 
         self.node_data = None
         self.state_data = None
-        # self.wiring_data = None
+        self.wiring_data = None
+        self.results_data = None
         self.png_data = {}
+        self.raw_data_files = []
         self.experiment_name = None
 
         self._load_experiment_data()
@@ -48,13 +71,22 @@ class QualibrateCloudHandler:
         with open(state_path, "r") as f:
             self.state_data = json.load(f)
 
-        # # Load wiring.json
-        # wiring_path = self.experiment_path / "quam_state" / "wiring.json"
-        # if not wiring_path.exists():
-        #     raise FileNotFoundError(f"wiring.json not found in {wiring_path}")
+        # wiring.json and data.json are optional (older nodes may lack them)
+        wiring_path = self.experiment_path / "quam_state" / "wiring.json"
+        if wiring_path.exists():
+            with open(wiring_path, "r") as f:
+                self.wiring_data = json.load(f)
 
-        # with open(wiring_path, 'r') as f:
-        #     self.wiring_data = json.load(f)
+        results_path = self.experiment_path / "data.json"
+        if results_path.exists():
+            with open(results_path, "r") as f:
+                self.results_data = json.load(f)
+
+        self.raw_data_files = sorted(
+            path
+            for path in self.experiment_path.iterdir()
+            if path.is_file() and path.suffix in RAW_DATA_SUFFIXES
+        )
 
         # Process PNG files
         for png_file in self.experiment_path.glob("*.png"):
@@ -68,24 +100,127 @@ class QualibrateCloudHandler:
                     "file_name": png_file.name,
                 }
 
-    def upload_to_cloud(self, quantum_computer_backend: str) -> None:
+    @staticmethod
+    def encode_raw_file(path: Path) -> dict:
+        """Compress and base64-encode a raw-data file into a JSON payload.
+
+        Args:
+            path: Path to the raw-data file.
+
+        Returns:
+            dict: Payload with the encoded data and integrity information.
+        """
+        raw = path.read_bytes()
+        return {
+            "data": base64.b64encode(zlib.compress(raw, 6)).decode("ascii"),
+            "__type__": RAW_DATA_TYPE,
+            "file_name": path.name,
+            "size": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+
+    @staticmethod
+    def decode_raw_file(payload: dict) -> bytes:
+        """Decode a raw-data payload produced by `encode_raw_file`.
+
+        Args:
+            payload: Payload as stored in the cloud.
+
+        Returns:
+            bytes: The original file content.
+
+        Raises:
+            ValueError: If the payload type is unknown or the decoded content
+                does not match the recorded size or sha256.
+        """
+        if payload.get("__type__") != RAW_DATA_TYPE:
+            raise ValueError(
+                f"Unexpected raw data type: {payload.get('__type__')}"
+            )
+        size = payload["size"]
+        # Bounded decompression: never expand beyond the recorded size.
+        decompressor = zlib.decompressobj()
+        raw = decompressor.decompress(
+            base64.b64decode(payload["data"]), size + 1
+        )
+        if len(raw) != size or not decompressor.eof:
+            raise ValueError("Decoded size does not match recorded size")
+        if hashlib.sha256(raw).hexdigest() != payload["sha256"]:
+            raise ValueError("sha256 mismatch")
+        return raw
+
+    def _encode_raw_data(
+        self, max_raw_bytes: int
+    ) -> tuple[dict | None, list[str]]:
+        """Bundle the raw-data files into a single payload.
+
+        Files are added smallest first until the total encoded size would
+        exceed the cap; the remaining files are skipped.
+
+        Args:
+            max_raw_bytes: Maximum total encoded size of the bundle.
+
+        Returns:
+            tuple: The bundle payload (None if there are no files) and the
+                names of the skipped files.
+        """
+        encoded = sorted(
+            (self.encode_raw_file(p) for p in self.raw_data_files),
+            key=lambda payload: len(payload["data"]),
+        )
+        files, skipped, total = [], [], 0
+        for payload in encoded:
+            total += len(payload["data"])
+            if total > max_raw_bytes:
+                total -= len(payload["data"])
+                print(
+                    f"✗ Skipping raw data file {payload['file_name']}: "
+                    f"bundle would exceed {max_raw_bytes / 1e6:.1f} MB"
+                )
+                skipped.append(payload["file_name"])
+            else:
+                files.append(payload)
+        if not files:
+            return None, skipped
+        files.sort(key=lambda payload: payload["file_name"])
+        return {"__type__": EXP_BUNDLE_TYPE, "files": files}, skipped
+
+    def upload_to_cloud(
+        self,
+        quantum_computer_backend: str,
+        upload_raw_data: bool = True,
+        max_raw_bytes: int = DEFAULT_MAX_RAW_BYTES,
+    ) -> None:
         """
         Upload the experiment data to the cloud.
 
         Args:
             quantum_computer_backend (str): Name of the quantum computer backend
+            upload_raw_data (bool): Also upload raw-data files (*.h5, *.npz)
+                as a single `exp_data` dataset (default: True)
+            max_raw_bytes (int): Maximum total encoded size of the raw-data
+                dataset; files that do not fit are skipped (default: 15 MiB)
         """
+        raw_bundle, skipped_raw_files = (
+            self._encode_raw_data(max_raw_bytes)
+            if upload_raw_data
+            else (None, [])
+        )
+
         qc = IQCC_Cloud(
             quantum_computer_backend=quantum_computer_backend, datastore="iqcc"
         )
 
         # Push parent data
+        parent_data = {
+            "local_dir": str(self.experiment_path),
+            "name": self.experiment_name,
+        }
+        if skipped_raw_files:
+            parent_data["skipped_raw_files"] = skipped_raw_files
         parent = qc.data.push(
             datatype=self.experiment_name,
-            data={
-                "local_dir": str(self.experiment_path),
-                "name": self.experiment_name,
-            },
+            data=parent_data,
         )
 
         # Push node.json data
@@ -104,14 +239,23 @@ class QualibrateCloudHandler:
             comment=self.experiment_name,
         )
 
-        # not pushing wiring.json data anymore
-        # # Push wiring.json data
-        # qc.data.push(
-        #     datatype=f"wiring",
-        #     data=self.wiring_data,
-        #     parent_id=parent.id,
-        #     comment=self.experiment_name
-        # )
+        # Push wiring.json data
+        if self.wiring_data is not None:
+            qc.data.push(
+                datatype="wiring",
+                data=self.wiring_data,
+                parent_id=parent.id,
+                comment=self.experiment_name,
+            )
+
+        # Push data.json (fit results and dataset references)
+        if self.results_data is not None:
+            qc.data.push(
+                datatype="node_data",
+                data=self.results_data,
+                parent_id=parent.id,
+                comment=self.experiment_name,
+            )
 
         # Push PNG files
         for png_data in self.png_data.values():
@@ -121,6 +265,19 @@ class QualibrateCloudHandler:
                 parent_id=parent.id,
                 comment=self.experiment_name,
             )
+
+        # Push all raw-data files as one dataset
+        if raw_bundle is not None:
+            if (
+                qc.data.push(
+                    datatype=EXP_DATA_DATATYPE,
+                    data=raw_bundle,
+                    parent_id=parent.id,
+                    comment=self.experiment_name,
+                )
+                is None
+            ):
+                print("✗ Failed to upload raw data")
 
     @classmethod
     def _save_experiment_data(
@@ -181,6 +338,20 @@ class QualibrateCloudHandler:
             print(f"✗ Could not retrieve wiring: {str(e)}")
             wiring_info = None
 
+        try:
+            results_info = None
+            results_children = qc.data.list_children(
+                datatype="node_data", parent_dataset_id=dataset_id
+            )
+            if results_children:
+                results_info = qc.data.get(results_children[0].id)
+                print("✓ Retrieved node_data")
+            else:
+                print("✗ No node_data found")
+        except Exception as e:
+            print(f"✗ Could not retrieve node_data: {str(e)}")
+            results_info = None
+
         # Save node.json
         if node_info:
             with open(experiment_dir / "node.json", "w") as f:
@@ -199,11 +370,19 @@ class QualibrateCloudHandler:
                 json.dump(wiring_info.data, f, indent=4)
             print("✓ Saved wiring.json")
 
+        # Save data.json
+        if results_info:
+            with open(experiment_dir / "data.json", "w") as f:
+                json.dump(results_info.data, f, indent=4)
+            print("✓ Saved data.json")
+
         # Save PNG files
         png_files = [
             qc.data.get(metadata.id)
             for metadata in qc.data.list_children(
-                datatype="figure", parent_dataset_id=dataset_id
+                datatype="figure",
+                parent_dataset_id=dataset_id,
+                limit=CHILDREN_LIMIT,
             )
         ]
         png_count = 0
@@ -223,6 +402,46 @@ class QualibrateCloudHandler:
             print(f"✓ Saved {png_count} PNG file(s)")
         else:
             print("✗ No PNG files found")
+
+        # Save experiment data files (*.h5 / *.npz)
+        raw_count = 0
+        exp_data_children = []
+        for datatype in (EXP_DATA_DATATYPE, LEGACY_EXP_DATA_DATATYPE):
+            exp_data_children.extend(
+                qc.data.list_children(
+                    datatype=datatype,
+                    parent_dataset_id=dataset_id,
+                    limit=CHILDREN_LIMIT,
+                )
+                or []
+            )
+        for metadata in exp_data_children:
+            data = qc.data.get(metadata.id).data
+            # Bundled (exp_data or legacy raw_data) and single-file payloads.
+            if data.get("__type__") in (
+                EXP_BUNDLE_TYPE,
+                LEGACY_EXP_BUNDLE_TYPE,
+            ):
+                payloads = data.get("files", [])
+            else:
+                payloads = [data]
+            for payload in payloads:
+                file_name = Path(payload.get("file_name", "")).name
+                if not file_name:
+                    print("✗ Raw data file without a file name")
+                    continue
+                try:
+                    raw = cls.decode_raw_file(payload)
+                except Exception as e:
+                    print(f"✗ Could not decode raw data {file_name}: {str(e)}")
+                    continue
+                with open(experiment_dir / file_name, "wb") as f:
+                    f.write(raw)
+                raw_count += 1
+        if raw_count > 0:
+            print(f"✓ Saved {raw_count} raw data file(s)")
+        else:
+            print("✗ No raw data files found")
 
     @classmethod
     def store_from_cloud(
